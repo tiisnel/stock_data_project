@@ -1,0 +1,84 @@
+version: "3.8"
+
+services:
+  airflow-webserver:
+    image: apache/airflow:2.6.3
+    container_name: airflow-webserver
+    depends_on:
+      - airflow-scheduler
+      - airflow-postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: "CeleryExecutor"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow"
+      AIRFLOW__CELERY__BROKER_URL: "redis://redis:6379/0"
+      AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://airflow:airflow@airflow-postgres:5432/airflow"
+      AIRFLOW__WEBSERVER__AUTHENTICATE: "True"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 300
+      AIRFLOW__WEBSERVER__WORKERS: 1 #increase if becoming bottleneck
+     # _PIP_ADDITIONAL_REQUIREMENTS: "yfinance pandas" # testing only, prefer dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - airflow_logs:/opt/airflow/logs
+      - ./airflow/dags:/opt/airflow/dags
+    env_file:
+      - .env  
+    networks:
+      - shared_network
+    command: webserver  # Ensure the webserver starts
+
+  airflow-scheduler:
+    image: apache/airflow:2.6.3
+    container_name: airflow-scheduler
+    depends_on:
+      - airflow-postgres
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow"
+    volumes:
+      - airflow_logs:/opt/airflow/logs
+      - ./airflow/dags:/opt/airflow/dags
+    env_file:
+      - .env  
+    networks:
+      - shared_network
+    command: scheduler  # Ensure the scheduler starts
+
+  airflow-init:
+    image: apache/airflow:2.6.3
+    container_name: airflow-init
+    depends_on:
+      - airflow-postgres
+    environment:
+      _AIRFLOW_DB_UPGRADE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
+      AIRFLOW__CORE__EXECUTOR: "CeleryExecutor"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow"
+
+    networks:
+      - shared_network
+    command: db init  # Initializes the Airflow database
+
+  airflow-postgres:
+    image: postgres:13
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - shared_network
+
+  redis:
+    image: redis:6
+    container_name: airflow-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - shared_network

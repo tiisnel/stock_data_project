@@ -1,0 +1,13 @@
+version: "3.8"
+
+networks:
+  shared_network:
+    external: true  # Declare as external to share between multiple Compose files
+
+volumes:
+  airflow_logs:
+    external: true  # Declare external to persist logs
+  airflow_postgres_data:
+    external: true  # External for Postgres persistence
+  minio_data:
+    external: true  # External for MinIO persistence

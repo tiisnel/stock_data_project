@@ -9,9 +9,9 @@ services:
       - airflow-postgres
     environment:
       AIRFLOW__CORE__EXECUTOR: "CeleryExecutor"
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@airflow-postgres:5432/${POSTGRES_DB}"
       AIRFLOW__CELERY__BROKER_URL: "redis://redis:6379/0"
-      AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://airflow:airflow@airflow-postgres:5432/airflow"
+      AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@airflow-postgres:5432/${POSTGRES_DB}"
       AIRFLOW__WEBSERVER__AUTHENTICATE: "True"
       AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 300
       AIRFLOW__WEBSERVER__WORKERS: 1 #increase if becoming bottleneck
@@ -36,7 +36,7 @@ services:
     depends_on:
       - airflow-postgres
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@airflow-postgres:5432/${POSTGRES_DB}"
     volumes:
       - airflow_logs:/opt/airflow/logs
       - ./airflow/dags:/opt/airflow/dags
@@ -57,7 +57,7 @@ services:
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER}
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
       AIRFLOW__CORE__EXECUTOR: "CeleryExecutor"
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@airflow-postgres:5432/${POSTGRES_DB}"
 
     networks:
       - shared_network

@@ -2,7 +2,7 @@
 
 # Load .env file
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
+    echo ".env exists"
 else
     echo ".env file not found in the current directory!"
     exit 1
@@ -15,6 +15,7 @@ docker network ls | grep -q "shared_network" || docker network create shared_net
 docker volume ls | grep -q "airflow_logs" || docker volume create airflow_logs
 docker volume ls | grep -q "airflow_postgres_data" || docker volume create airflow_postgres_data
 docker volume ls | grep -q "minio_data" || docker volume create minio_data
+docker volume ls | grep -q "duckdb_data" || docker volume create duckdb_data
 
 # Define the command from the first argument
 COMMAND=$1

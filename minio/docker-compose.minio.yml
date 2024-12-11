@@ -15,6 +15,16 @@ services:
       - minio_data:/data
     networks:
       - shared_network
+  duckdb:
+    container_name: duckdb
+    stdin_open: true
+    tty: true
+    build:
+      context: ./minio
+    volumes:
+    - duckdb_data:/app/data
+    networks:
+      - shared_network
 
 networks:
   shared_network:
@@ -22,4 +32,6 @@ networks:
 
 volumes:
   minio_data:
+    external: true
+  duckdb_data:
     external: true

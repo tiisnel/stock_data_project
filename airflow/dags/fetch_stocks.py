@@ -1,37 +1,45 @@
+import os
+import logging
+from datetime import datetime
+import duckdb
+import yfinance as yf
+import pandas as pd
+from minio import Minio
+import wbdata
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from datetime import datetime, timedelta
-from minio import Minio
-import duckdb
-impart pandas as pd
-import os
-from dotenv import load_dotenv
-import logging
-from wbdata import get_dataframe
-import yfinance as yf
+from datetime import datetime
 
-load_dotenv()
-
+# MinIO connection details (replace with your actual credentials)
 access_key = os.getenv("MINIO_ROOT_USER")
 secret_key = os.getenv("MINIO_ROOT_PASSWORD")
+minio_endpoint = "minio:9000"
 
+# Function to get the last saved date from MinIO (modified to handle potential issues)
 def get_last_saved_date(bucket_name, prefix, minio_client=None):
     """
     Get the latest file's date from MinIO bucket based on file naming convention.
     """
-    objects = minio_client.list_objects(bucket_name, prefix=prefix)
-    latest_date = None
-    for obj in objects:
-        # filename format "<prefix>:<YYYY-MM-DD>.csv"
-        file_date = obj.object_name.split(":")[-1].replace(".csv", "")
-        file_date = datetime.strptime(file_date, "%Y-%m-%d").date()
-        if not latest_date or file_date > latest_date:
-            latest_date = file_date
-    return latest_date
+    try:
+        objects = minio_client.list_objects(bucket_name, prefix=prefix, recursive=True)
+        latest_date = None
+        for obj in objects:
+            file_date_str = obj.object_name.split(":")[-1].replace(".csv", "")
+            try:
+                file_date = datetime.strptime(file_date_str, "%Y-%m-%d").date()
+                if not latest_date or file_date > latest_date:
+                    latest_date = file_date
+            except ValueError:
+                logging.warning(f"Skipping file with invalid date format: {obj.object_name}")
+        return latest_date
+    except Exception as e:
+        logging.error(f"Error listing objects in bucket {bucket_name}: {e}")
+        return None
 
+# Airflow Task: Fetch and save stock data to MinIO
 def fetch_and_save_stocks(ds, **kwargs):
     client = Minio(
-        "minio:9000",
+        minio_endpoint,
         access_key=access_key,
         secret_key=secret_key,
         secure=False
@@ -42,26 +50,37 @@ def fetch_and_save_stocks(ds, **kwargs):
 
     if not client.bucket_exists(bucket_name):
         client.make_bucket(bucket_name)
+
     last_save = get_last_saved_date(bucket_name, prefix, client)
     if not last_save:
         last_save = datetime(2020, 1, 1).date()  # Start date for stock analysis
     end_date = today
+
     if last_save >= end_date:
         logging.info("Stock data up to date")
         return
+
     logging.info(f"Fetching stock data from {last_save} to {end_date}")
-    tickers = ['^DJI', '^GSPC', 'CME']
-    df = yf.download(tickers, start=last_save, end=end_date)
+    tickers = ['^DJI', '^GSPC', '^NDX']  # Corrected ticker for NASDAQ 100
+    df = yf.download(tickers, start=last_save, end=end_date, group_by="ticker")
+
+    # Correctly reshape the DataFrame
+    df = df.stack(level=0).rename_axis(['Date', 'Ticker']).reset_index()
+    df.columns = ['Date', 'Ticker', 'Adj Close', 'Close', 'High', 'Low', 'Open', 'Volume']
+    df = df[['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']]
+
     csv_filename = f"{prefix}:{today}.csv"
-    df.to_csv(csv_filename)
+    df.to_csv(csv_filename, index=False)  # Added index=False
     with open(csv_filename, "rb") as file_data:
         client.put_object(
             bucket_name, csv_filename, file_data, os.path.getsize(csv_filename)
         )
+    os.remove(csv_filename)  # Clean up the temporary CSV file
 
+# Airflow Task: Fetch and save World Bank data to MinIO
 def fetch_and_save_world_bank_data(ds, **kwargs):
     client = Minio(
-        "minio:9000",
+        minio_endpoint,
         access_key=access_key,
         secret_key=secret_key,
         secure=False
@@ -78,78 +97,189 @@ def fetch_and_save_world_bank_data(ds, **kwargs):
     }
 
     logging.info("Fetching World Bank data")
-    df = get_dataframe(indicators, convert_date=True)
+
+    # Use wbdata.get_dataframe to fetch data
+    df = wbdata.get_dataframe(indicators, country='USA', convert_date=True)
+
+    # Reset the index to make 'Date' a column
+    df = df.reset_index()
+
+    # Rename columns for clarity
+    df.rename(columns={
+        "GDP Growth": "GDPGrowthRate",
+        "Inflation, Consumer Prices": "InflationRate"
+    }, inplace=True)
+
     csv_filename = f"world_bank:{today}.csv"
-    df.to_csv(csv_filename)
+    df.to_csv(csv_filename, index=False)
     with open(csv_filename, "rb") as file_data:
         client.put_object(
             bucket_name, csv_filename, file_data, os.path.getsize(csv_filename)
         )
+    os.remove(csv_filename)
 
-def create_duckdb_tables(ds, **kwargs):
+# Function to create the star schema in DuckDB
+def create_star_schema(ds, **kwargs):
+    # Connect to DuckDB (in-memory database)
     client = Minio(
-        "minio:9000",
-        access_key=access_key,
-        secret_key=secret_key,
-        secure=False
+    minio_endpoint,
+    access_key=access_key,
+    secret_key=secret_key,
+    secure=False
     )
-    bucket_name = "p20"
-    duckdb_bucket = "duckdb"
-    today = datetime.now().date()
+    con = duckdb.connect()
+    con.execute("INSTALL httpfs")
+    con.execute("LOAD httpfs")
 
-    if not client.bucket_exists(duckdb_bucket):
-        client.make_bucket(duckdb_bucket)
+    # Install and load the aws extension
+    con.execute("INSTALL aws")
+    con.execute("LOAD aws")
+    con.sql(f"SET s3_url_style=path")
+    con.sql(f"SET s3_endpoint='{minio_endpoint}'")
+    con.sql(f"SET s3_access_key_id='{access_key}'")
+    con.sql(f"SET s3_secret_access_key='{secret_key}'")
+    con.sql("SET s3_use_ssl=false")
 
-    # Connect DuckDB to MinIO S3 bucket
-    con = duckdb.connect(database=":memory:")
-    s3_config = {
-        "s3_url_style": "path",
-        "s3_use_ssl": "false",
-        "s3_access_key_id": access_key,
-        "s3_secret_access_key": secret_key,
-        "s3_endpoint": "minio:9000"
-    }
-    for key, value in s3_config.items():
-        con.execute(f"SET {key}='{value}'")
+    # --- 1. Read data from MinIO into DuckDB ---
+    source_bucket_name = "p20"  # Source bucket for CSV files
+    parquet_bucket_name = "star"  # Destination bucket for Parquet files
 
-    # Load CSV files directly from S3 into DuckDB
-    stocks_table = f"stocks_{today}"
-    world_bank_table = f"world_bank_{today}"
+    # Make sure the "star" bucket exists
+    if not client.bucket_exists(parquet_bucket_name):
+        client.make_bucket(parquet_bucket_name)
 
-    con.execute(f"CREATE TABLE stocks AS SELECT * FROM read_csv_auto('s3://{bucket_name}/stocks:{today}.csv')")
-    con.execute(f"CREATE TABLE world_bank AS SELECT * FROM read_csv_auto('s3://{bucket_name}/world_bank:{today}.csv')")
+    # Read the latest stocks CSV
+    stocks_df = con.sql(f"""
+        SELECT * FROM read_csv_auto('s3://{source_bucket_name}/stocks:*.csv',
+        filename=true, header=true, dateformat='%Y-%m-%d')
+    """).df()
 
-    # Export tables to Parquet format
-    con.execute(f"COPY stocks TO 's3://{duckdb_bucket}/stocks_{today}.parquet' (FORMAT 'parquet')")
-    con.execute(f"COPY world_bank TO 's3://{duckdb_bucket}/world_bank_{today}.parquet' (FORMAT 'parquet')")
+    # Read the latest world_bank CSV
+    world_bank_df = con.sql(f"""
+        SELECT * FROM read_csv_auto('s3://{source_bucket_name}/world_bank:*.csv',
+        filename=true, header=true, dateformat='%Y-%m-%d')
+    """).df()
+    # --- 2. Create Dimension Tables ---
 
-def load_data_from_bucket(ds, **kwargs):
-    client = Minio(
-        "minio:9000",
-        access_key=access_key,
-        secret_key=secret_key,
-        secure=False
-    )
-    bucket_name = "duckdb"
+    # Date Dimension
+    con.sql("""
+        CREATE OR REPLACE TABLE DimDate AS
+        SELECT DISTINCT
+            CAST(Date AS DATE) as DateKey,
+            Date as Date,
+            YEAR(Date) as Year,
+            MONTH(Date) as Month,
+            CAST(Date AS VARCHAR) as DayOfWeek,
+            CASE WHEN strftime(Date, '%w') IN ('0', '6') THEN TRUE ELSE FALSE END as IsWeekend
+        FROM stocks_df
+        UNION
+        SELECT DISTINCT
+            CAST(Date AS DATE) as DateKey,
+            Date as Date,
+            YEAR(Date) as Year,
+            MONTH(Date) as Month,
+            CAST(Date AS VARCHAR) as DayOfWeek,
+            CASE WHEN strftime(Date, '%w') IN ('0', '6') THEN TRUE ELSE FALSE END as IsWeekend
+        FROM world_bank_df
+    """)
 
-    # List all objects in the bucket
-    objects = client.list_objects(bucket_name)
-    for obj in objects:
-        logging.info(f"Found file: {obj.object_name}")
+    # Stock Index Dimension
+    con.sql("""
+        CREATE OR REPLACE TABLE DimStockIndex AS
+        SELECT DISTINCT
+            MD5(Ticker) AS IndexKey, -- Using a hash as a unique key
+            Ticker as IndexName,
+            CASE
+                WHEN Ticker = '^GSPC' THEN 'S&P 500'
+                WHEN Ticker = '^NDX' THEN 'NASDAQ 100'
+                WHEN Ticker = '^DJI' THEN 'Dow Jones'
+                ELSE 'Other'
+            END AS IndexCode
+        FROM stocks_df
+    """)
 
-    # Example: Download and load Parquet files
-    stocks_file = f"stocks_{datetime.now().date()}.parquet"
-    world_bank_file = f"world_bank_{datetime.now().date()}.parquet"
+    # Country Dimension
+    con.sql("""
+        CREATE OR REPLACE TABLE DimCountry AS
+        SELECT 
+            'USA' AS CountryKey,
+            'United States' AS CountryName,
+            'USA' AS CountryCode
+    """)
 
-    client.fget_object(bucket_name, stocks_file, stocks_file)
-    client.fget_object(bucket_name, world_bank_file, world_bank_file)
+    # --- 3. Create Fact Table ---
 
-    # Load into pandas DataFrame
-    stocks_df = pd.read_parquet(stocks_file)
-    world_bank_df = pd.read_parquet(world_bank_file)
+    # Calculate Daily Return
+    stocks_df['DailyReturn'] = stocks_df.groupby('Ticker')['Close'].pct_change()
 
-    logging.info(f"Stocks DataFrame: {stocks_df.head()}")
-    logging.info(f"World Bank DataFrame: {world_bank_df.head()}")
+    # Calculate a simple Volatility measure (you might refine this)
+    stocks_df['Volatility'] = stocks_df.groupby('Ticker')['DailyReturn'].transform(lambda x: x.rolling(window=20).std())
+    world_bank_df.rename(columns={
+        "GDP Growth": "GDPGrowthRate",
+        "Inflation, Consumer Prices": "InflationRate"
+    }, inplace=True)
+    con.sql("""
+        CREATE OR REPLACE TABLE FactMarketEconomicIndicators AS
+        SELECT
+            dd.DateKey,
+            dsi.IndexKey,
+            dc.CountryKey,
+            s.Open,
+            s.High,
+            s.Low,
+            s.Close,
+            s.Volume,
+            s.DailyReturn,
+            s.Volatility,
+            wb."GDPGrowthRate",
+            wb."InflationRate"
+        FROM stocks_df s
+        JOIN DimDate dd ON CAST(s.Date AS DATE) = dd.DateKey
+        JOIN DimStockIndex dsi ON MD5(s.Ticker) = dsi.IndexKey
+        LEFT JOIN world_bank_df wb ON CAST(s.Date AS DATE) = CAST(wb.Date AS DATE)
+        JOIN DimCountry dc ON dc.CountryCode = 'USA'
+    """)
+    # --- 4. Export Fact Table to Parquet (to MinIO) ---
+    con.sql(f"""
+        COPY FactMarketEconomicIndicators 
+        TO 's3://{parquet_bucket_name}/fact_table.parquet' 
+        (FORMAT PARQUET);
+    """)
+
+    # --- (Optional) Export dimension tables to MinIO as well ---
+    con.sql(f"""
+        COPY DimDate 
+        TO 's3://{parquet_bucket_name}/dim_date.parquet' 
+        (FORMAT PARQUET);
+    """)
+
+    con.sql(f"""
+        COPY DimStockIndex 
+        TO 's3://{parquet_bucket_name}/dim_stock_index.parquet' 
+        (FORMAT PARQUET);
+    """)
+
+    con.sql(f"""
+        COPY DimCountry
+        TO 's3://{parquet_bucket_name}/dim_country.parquet' 
+        (FORMAT PARQUET);
+    """)
+
+    
+    # --- 5. Verify the Schema ---
+    print("DimDate Table:")
+    print(con.sql("SELECT * FROM DimDate LIMIT 5").df())
+
+    print("DimStockIndex Table:")
+    print(con.sql("SELECT * FROM DimStockIndex").df())
+
+    print("DimCountry Table:")
+    print(con.sql("SELECT * FROM DimCountry").df())
+
+    print("FactMarketEconomicIndicators Table:")
+    print(con.sql("SELECT * FROM FactMarketEconomicIndicators LIMIT 5").df())
+
+    con.close()
 
 default_args = {
     'owner': 'airflow',
@@ -160,36 +290,28 @@ default_args = {
 }
 
 with DAG(
-    dag_id="fetch_data_dag",
-    default_args=default_args,
-    description="Fetch stock and World Bank data and save to MinIO",
-    schedule_interval="@daily",
-    start_date=datetime(2024, 10, 8),
+    dag_id="stock_market_star_schema",
+    schedule_interval="0 0 * * *",  # Run daily at midnight, adjust as needed
+    start_date=datetime(2023, 1, 1),
+    catchup=False,
+    tags=["stock_market", "star_schema", "duckdb"],
 ) as dag:
-
-    fetch_stocks = PythonOperator(
-        task_id="fetch_stocks",
+    fetch_stocks_task = PythonOperator(
+        task_id="fetch_and_save_stocks",
         python_callable=fetch_and_save_stocks,
         provide_context=True,
     )
 
-    fetch_world_bank_data = PythonOperator(
-        task_id="fetch_world_bank_data",
+    fetch_world_bank_task = PythonOperator(
+        task_id="fetch_and_save_world_bank_data",
         python_callable=fetch_and_save_world_bank_data,
         provide_context=True,
     )
 
-    create_duckdb = PythonOperator(
-        task_id="create_duckdb",
-        python_callable=create_duckdb_tables,
+    create_schema_task = PythonOperator(
+        task_id="create_star_schema",
+        python_callable=create_star_schema,
         provide_context=True,
     )
 
-    load_data = PythonOperator(
-        task_id="load_data",
-        python_callable=load_data_from_bucket,
-        provide_context=True,
-    )
-
-fetch_stocks >> fetch_world_bank_data >> create_duckdb >> load_data
-
+    fetch_stocks_task >> fetch_world_bank_task >> create_schema_task

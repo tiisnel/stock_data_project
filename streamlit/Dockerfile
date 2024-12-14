@@ -1,5 +1,4 @@
 FROM python:3.12.7-slim-bookworm
-
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

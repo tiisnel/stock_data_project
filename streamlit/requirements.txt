@@ -4,3 +4,4 @@ watchdog
 matplotlib
 plotly
 minio
+s3fs

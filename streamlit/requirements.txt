@@ -1,0 +1,5 @@
+streamlit
+minio
+duckdb
+s3fs
+matplotlib

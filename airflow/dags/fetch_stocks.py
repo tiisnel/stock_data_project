@@ -53,7 +53,7 @@ def fetch_and_save_stocks(ds, **kwargs):
 
     last_save = get_last_saved_date(bucket_name, prefix, client)
     if not last_save:
-        last_save = datetime(2020, 1, 1).date()  # Start date for stock analysis
+        last_save = datetime(2000, 1, 1).date()  # Start date for stock analysis
     end_date = today
 
     if last_save >= end_date:
@@ -236,7 +236,7 @@ def create_star_schema(ds, **kwargs):
         FROM stocks_df s
         JOIN DimDate dd ON CAST(s.Date AS DATE) = dd.DateKey
         JOIN DimStockIndex dsi ON MD5(s.Ticker) = dsi.IndexKey
-        LEFT JOIN world_bank_df wb ON CAST(s.Date AS DATE) = CAST(wb.Date AS DATE)
+        LEFT JOIN world_bank_df wb ON EXTRACT(YEAR FROM s.Date) = EXTRACT(YEAR FROM wb.Date)
         JOIN DimCountry dc ON dc.CountryCode = 'USA'
     """)
     # --- 4. Export Fact Table to Parquet (to MinIO) ---

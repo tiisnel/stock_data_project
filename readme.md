@@ -7,5 +7,4 @@ chmod +x composer.sh
 composer.sh up
 
 cd stremlit
-docker build -t streamlit-app .
-docker run -p 8501:8501 streamlit-app
+docker-compose -f docker-compose.streamlit.yml up --build

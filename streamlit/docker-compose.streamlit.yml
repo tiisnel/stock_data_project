@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  streamlit:
+    container_name: streamlit_app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    networks:
+      - shared_network
+      
+networks:
+  shared_network:
+    external: true

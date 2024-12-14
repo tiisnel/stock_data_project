@@ -53,7 +53,7 @@ def fetch_and_save_stocks(ds, **kwargs):
 
     last_save = get_last_saved_date(bucket_name, prefix, client)
     if not last_save:
-        last_save = datetime(2000, 1, 1).date()  # Start date for stock analysis
+        last_save = datetime(1990, 1, 1).date()  # Start date for stock analysis
     end_date = today
 
     if last_save >= end_date:
@@ -77,6 +77,7 @@ def fetch_and_save_stocks(ds, **kwargs):
         )
     os.remove(csv_filename)  # Clean up the temporary CSV file
 
+
 # Airflow Task: Fetch and save World Bank data to MinIO
 def fetch_and_save_world_bank_data(ds, **kwargs):
     client = Minio(
@@ -99,7 +100,8 @@ def fetch_and_save_world_bank_data(ds, **kwargs):
     logging.info("Fetching World Bank data")
 
     # Use wbdata.get_dataframe to fetch data
-    df = wbdata.get_dataframe(indicators, country='USA', convert_date=True)
+    df = wbdata.get_dataframe(indicators, country='USA', convert_date=True, freq='M')
+
 
     # Reset the index to make 'Date' a column
     df = df.reset_index()
@@ -154,6 +156,7 @@ def create_star_schema(ds, **kwargs):
         filename=true, header=true, dateformat='%Y-%m-%d')
     """).df()
 
+
     # Read the latest world_bank CSV
     world_bank_df = con.sql(f"""
         SELECT * FROM read_csv_auto('s3://{source_bucket_name}/world_bank:*.csv',
@@ -168,6 +171,7 @@ def create_star_schema(ds, **kwargs):
             CAST(Date AS DATE) as DateKey,
             Date as Date,
             YEAR(Date) as Year,
+            CAST(QUARTER(Date) AS VARCHAR) as Quarter, -- Added Quarter calculation
             MONTH(Date) as Month,
             CAST(Date AS VARCHAR) as DayOfWeek,
             CASE WHEN strftime(Date, '%w') IN ('0', '6') THEN TRUE ELSE FALSE END as IsWeekend
@@ -177,6 +181,7 @@ def create_star_schema(ds, **kwargs):
             CAST(Date AS DATE) as DateKey,
             Date as Date,
             YEAR(Date) as Year,
+            CAST(QUARTER(Date) AS VARCHAR) as Quarter, -- Added Quarter calculation
             MONTH(Date) as Month,
             CAST(Date AS VARCHAR) as DayOfWeek,
             CASE WHEN strftime(Date, '%w') IN ('0', '6') THEN TRUE ELSE FALSE END as IsWeekend
@@ -212,32 +217,51 @@ def create_star_schema(ds, **kwargs):
     # Calculate Daily Return
     stocks_df['DailyReturn'] = stocks_df.groupby('Ticker')['Close'].pct_change()
 
-    # Calculate a simple Volatility measure (you might refine this)
-    stocks_df['Volatility'] = stocks_df.groupby('Ticker')['DailyReturn'].transform(lambda x: x.rolling(window=20).std())
+    # Calculate Volatility (smaller window, min_periods)
+    stocks_df['Volatility'] = stocks_df.groupby('Ticker')['DailyReturn'].transform(
+        lambda x: x.rolling(window=5, min_periods=3).std()
+    )
+
+    stocks_df.dropna(subset=['DailyReturn'], inplace=True)
     world_bank_df.rename(columns={
         "GDP Growth": "GDPGrowthRate",
         "Inflation, Consumer Prices": "InflationRate"
     }, inplace=True)
     con.sql("""
-        CREATE OR REPLACE TABLE FactMarketEconomicIndicators AS
+        CREATE OR REPLACE TABLE AnnualStockData AS
         SELECT
-            dd.DateKey,
             dsi.IndexKey,
             dc.CountryKey,
-            s.Open,
-            s.High,
-            s.Low,
-            s.Close,
-            s.Volume,
-            s.DailyReturn,
-            s.Volatility,
-            wb."GDPGrowthRate",
-            wb."InflationRate"
+            STRFTIME(CAST(s.Date as DATE), '%Y') AS Year,  -- Extract year for aggregation
+            AVG(s.Open) AS AvgOpen,
+            AVG(s.High) AS AvgHigh,
+            AVG(s.Low) AS AvgLow,
+            AVG(s.Close) AS AvgClose,
+            AVG(s.Volume) AS AvgVolume,
+            AVG(s.Volatility) AS AvgVolatility  -- Calculate average volatility for the year
         FROM stocks_df s
-        JOIN DimDate dd ON CAST(s.Date AS DATE) = dd.DateKey
         JOIN DimStockIndex dsi ON MD5(s.Ticker) = dsi.IndexKey
-        LEFT JOIN world_bank_df wb ON EXTRACT(YEAR FROM s.Date) = EXTRACT(YEAR FROM wb.Date)
         JOIN DimCountry dc ON dc.CountryCode = 'USA'
+        GROUP BY 1, 2, 3  -- Group by IndexKey, CountryKey, Year
+    """)
+
+    # --- Join with World Bank Data ---
+    con.sql("""
+        CREATE OR REPLACE TABLE FactMarketEconomicIndicators AS
+        SELECT
+            asd.Year,
+            asd.IndexKey,
+            asd.CountryKey,
+            asd.AvgOpen,
+            asd.AvgHigh,
+            asd.AvgLow,
+            asd.AvgClose,
+            asd.AvgVolume,
+            asd.AvgVolatility,
+            wb.GDPGrowthRate,
+            wb.InflationRate
+        FROM AnnualStockData asd
+        LEFT JOIN world_bank_df wb ON asd.Year = STRFTIME(CAST(wb.Date as DATE), '%Y')
     """)
     # --- 4. Export Fact Table to Parquet (to MinIO) ---
     con.sql(f"""

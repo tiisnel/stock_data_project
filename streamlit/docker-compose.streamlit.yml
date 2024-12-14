@@ -1,21 +1,21 @@
 version: "3.8"
 
 services:
-  streamlit:
-    container_name: streamlit_app
+  sl:
+    container_name: sl
     build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "8501:8501"
-    volumes:
-      - .:/app
+      context: streamlit/ # Build from the Dockerfile
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./streamlit/app:/app  # Bind mount the app directory for dynamic updates
+    ports:
+      - "8501:8501"  # Map Streamlit port to localhost
+      - "8502:8502"  # Map alternative port to localhost
     networks:
       - shared_network
-      
+
 networks:
   shared_network:
     external: true

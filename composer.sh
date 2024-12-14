@@ -29,25 +29,26 @@ if [ "$COMMAND" == "init" ]; then
 elif [ "$COMMAND" == "up" ]; then
     docker-compose -f docker-compose.base.yml \
                    -f airflow/docker-compose.airflow.yml \
-                   -f minio/docker-compose.minio.yml up --build -d # to rebuild dockerfile, add --build flag!! 
+                   -f minio/docker-compose.minio.yml \
+                   -f streamlit/docker-compose.streamlit.yml up --build -d # to rebuild dockerfile, add --build flag!! 
 elif [ "$COMMAND" == "down" ]; then
     docker-compose -f docker-compose.base.yml \
                    -f airflow/docker-compose.airflow.yml \
-                   -f minio/docker-compose.minio.yml down
+                   -f minio/docker-compose.minio.yml -f streamlit/docker-compose.streamlit.yml down
 elif [ "$COMMAND" == "logs" ]; then
     echo "Fetching logs from all services..."
     docker-compose -f docker-compose.base.yml \
                    -f airflow/docker-compose.airflow.yml \
-                   -f minio/docker-compose.minio.yml logs -f
+                   -f minio/docker-compose.minio.yml -f streamlit/docker-compose.streamlit.yml logs -f
 elif [ "$COMMAND" == "start" ]; then
     docker-compose -f docker-compose.base.yml \
                    -f airflow/docker-compose.airflow.yml \
-                   -f minio/docker-compose.minio.yml start
+                   -f minio/docker-compose.minio.yml -f streamlit/docker-compose.streamlit.yml start
 
 elif [ "$COMMAND" == "stop" ]; then
     docker-compose -f docker-compose.base.yml \
                    -f airflow/docker-compose.airflow.yml \
-                   -f minio/docker-compose.minio.yml stop
+                   -f minio/docker-compose.minio.yml -f streamlit/docker-compose.streamlit.yml stop
 else
     echo "Usage: $0 {init|up|down|start|stop|logs}"
     echo "  init   - run first time to create user"

@@ -68,11 +68,6 @@ Start Airflow with ETL tasks: ./composer.sh up.
 
 ### Visualize Data:
 
-Navigate to the Streamlit directory: cd streamlit.
-
-Start the Streamlit app: docker-compose -f docker-compose.streamlit.yml up --build.
-
-Interact with the Dashboard:
 
 Access Streamlit at http://localhost:8501.
 

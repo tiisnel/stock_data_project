@@ -5,3 +5,7 @@ to run:
 create .env based on .env.template
 chmod +x composer.sh
 composer.sh up
+
+cd stremlit
+docker build -t streamlit-app .
+docker run -p 8501:8501 streamlit-app

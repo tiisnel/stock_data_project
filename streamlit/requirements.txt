@@ -1,0 +1,6 @@
+streamlit
+duckdb
+watchdog
+matplotlib
+plotly
+minio

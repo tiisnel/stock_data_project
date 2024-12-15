@@ -59,12 +59,17 @@ Streamlit provides an interactive dashboard to explore datasets and visualize re
 ### Environment Setup:
 
 Create a .env file based on the .env.template for storing MinIO credentials.
+NB! if on windows, make sure that lines end with LF, not CRLF
 
 ### Run ETL Pipeline:
 
 Make composer.sh executable: chmod +x composer.sh.
 
-Start Airflow with ETL tasks: ./composer.sh up.
+Start Airflow with ETL tasks: 
+./composer.sh init
+./composer.sh up.
+
+As airflow runs only once a day, it might be a good idea to trigger first run manually on localhost:8080
 
 ### Visualize Data:
 
@@ -87,17 +92,3 @@ Dual-axis charts show trends in stock prices and GDP growth.
 Filter by stock index and date range
 
 
-
-to run:
-create .env based on .env.template NB! if on windows, make sure that lines end with LF, not CRLF
-
-chmod +x composer.sh
-./composer.sh init
-./composer.sh up
-
-As airflow runs only once a day, first time you should manually trigger the dag from airflow localhost:8080
-
-to view results:
-cd streamlit
-docker-compose -f docker-compose.streamlit.yml up --build
-you can see the results from localhost:8501
